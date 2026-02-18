@@ -1,8 +1,14 @@
 package com.workplace.inspection
 
+import android.content.Context
+import android.graphics.Paint
+import android.graphics.pdf.PdfDocument
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,7 +24,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Assignment
+import androidx.compose.material.icons.automirrored.filled.Assignment
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.MoreHoriz
@@ -52,11 +58,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import java.io.ByteArrayOutputStream
 import java.text.DecimalFormat
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -75,7 +85,7 @@ private enum class AppTab(val title: String, val icon: ImageVector) {
     Dashboard("Dashboard", Icons.Filled.Home),
     Personnel("Personel", Icons.Filled.People),
     Operations("Operasyon", Icons.Filled.Build),
-    Audit("Denetim", Icons.Filled.Assignment),
+    Audit("Denetim", Icons.AutoMirrored.Filled.Assignment),
     Extras("Ekstralar", Icons.Filled.MoreHoriz)
 }
 
@@ -181,6 +191,7 @@ private data class DocumentExpiry(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun WorkplaceInspectionApp() {
+    val context = LocalContext.current
     val moneyFormatter = remember { DecimalFormat("#,###") }
     val tabItems = remember { AppTab.entries }
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
@@ -214,10 +225,29 @@ private fun WorkplaceInspectionApp() {
     val trainingRecords = remember { mutableStateListOf<TrainingRecord>() }
     val shiftPlans = remember { mutableStateListOf<ShiftPlan>() }
     val documentExpiries = remember { mutableStateListOf<DocumentExpiry>() }
+    var pendingReportBytes by remember { mutableStateOf<ByteArray?>(null) }
 
     val notify: (String) -> Unit = { message ->
         coroutineScope.launch {
             snackbarHostState.showSnackbar(message)
+        }
+    }
+
+    val documentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/pdf")
+    ) { uri ->
+        val reportBytes = pendingReportBytes
+        pendingReportBytes = null
+
+        if (uri == null || reportBytes == null) {
+            notify("Dokuman kaydi iptal edildi.")
+            return@rememberLauncherForActivityResult
+        }
+
+        if (writeBytesToUri(context, uri, reportBytes)) {
+            notify("PDF dokumani kaydedildi.")
+        } else {
+            notify("PDF dokumani kaydedilemedi.")
         }
     }
 
@@ -226,7 +256,7 @@ private fun WorkplaceInspectionApp() {
             TopAppBar(
                 title = {
                     Column {
-                        Text("Is Yeri Denetim Uygulamasi", fontWeight = FontWeight.Bold)
+                        Text("vateksan", fontWeight = FontWeight.Bold)
                         Text("Yonetici, mesai, izin, maas, ariza ve daha fazlasi")
                     }
                 }
@@ -263,7 +293,30 @@ private fun WorkplaceInspectionApp() {
                     incidents = incidents,
                     correctiveActions = correctiveActions,
                     trainingRecords = trainingRecords,
-                    moneyFormatter = moneyFormatter
+                    moneyFormatter = moneyFormatter,
+                    onExportReport = {
+                        val reportText = buildVateksanReport(
+                            employees = employees,
+                            overtimeRecords = overtimeRecords,
+                            leaveRequests = leaveRequests,
+                            payrollRuns = payrollRuns,
+                            faultReports = faultReports,
+                            maintenancePlans = maintenancePlans,
+                            assetAssignments = assetAssignments,
+                            calibrationPlans = calibrationPlans,
+                            auditChecks = auditChecks,
+                            incidents = incidents,
+                            correctiveActions = correctiveActions,
+                            visitorLogs = visitorLogs,
+                            trainingRecords = trainingRecords,
+                            shiftPlans = shiftPlans,
+                            documentExpiries = documentExpiries,
+                            moneyFormatter = moneyFormatter
+                        )
+                        pendingReportBytes = createPdfFromText(reportText)
+                        val reportDate = DateTimeFormatter.ofPattern("yyyyMMdd_HHmm").format(LocalDateTime.now())
+                        documentLauncher.launch("vateksan_raporu_$reportDate.pdf")
+                    }
                 )
 
                 AppTab.Personnel -> PersonnelScreen(
@@ -314,7 +367,8 @@ private fun DashboardScreen(
     incidents: List<IncidentReport>,
     correctiveActions: List<CorrectiveAction>,
     trainingRecords: List<TrainingRecord>,
-    moneyFormatter: DecimalFormat
+    moneyFormatter: DecimalFormat,
+    onExportReport: () -> Unit
 ) {
     val monthlyOvertimeHours = overtimeRecords.sumOf { it.hours }
     val managerCount = employees.count { it.isManager }
@@ -324,6 +378,7 @@ private fun DashboardScreen(
     val nonConformance = auditChecks.count { it.status.equals("Uygunsuz", ignoreCase = true) }
     val totalPayroll = payrollRuns.sumOf { it.netAmount }
     val criticalIncidents = incidents.count { it.severity.equals("Yuksek", ignoreCase = true) }
+    val plannedMaintenances = maintenancePlans.size
 
     ScreenContainer {
         Text(
@@ -360,6 +415,13 @@ private fun DashboardScreen(
             secondValue = criticalIncidents.toString()
         )
 
+        MetricRow(
+            firstTitle = "Bakim Plani",
+            firstValue = plannedMaintenances.toString(),
+            secondTitle = "Egitim Kaydi",
+            secondValue = trainingRecords.size.toString()
+        )
+
         MetricCard(
             title = "Kayitli Net Maas Toplami",
             value = "${moneyFormatter.format(totalPayroll)} TL",
@@ -373,6 +435,7 @@ private fun DashboardScreen(
             val priorities = buildList {
                 if (pendingLeaves > 0) add("$pendingLeaves adet izin talebi beklemede.")
                 if (openFaults > 0) add("$openFaults adet acik ariza var, bakim planini hizlandirin.")
+                if (openFaults > 0 && plannedMaintenances == 0) add("Arizalara ragmen bakim plani bulunmuyor.")
                 if (openActions > 0) add("$openActions adet duzeltici faaliyet kapanmamis.")
                 if (nonConformance > 0) add("$nonConformance adet uygunsuzluk takibi gerekli.")
                 if (trainingRecords.isEmpty()) add("Egitim kaydi eklenmedi, zorunlu egitimleri planlayin.")
@@ -384,6 +447,16 @@ private fun DashboardScreen(
                 priorities.forEach { line ->
                     Text("• $line")
                 }
+            }
+        }
+
+        SectionCard(
+            title = "Dokuman Ciktisi",
+            subtitle = "Tum kayitlarinizi PDF olarak disa aktarabilirsiniz"
+        ) {
+            Text("Kaydet butonu ile denetim raporunu cihaza dokuman olarak alin.")
+            Button(onClick = onExportReport) {
+                Text("PDF Raporu Kaydet")
             }
         }
 
@@ -1264,4 +1337,299 @@ private fun InfoList(emptyText: String, lines: List<String>) {
             HorizontalDivider(modifier = Modifier.padding(top = 6.dp))
         }
     }
+}
+
+private fun writeBytesToUri(context: Context, uri: Uri, bytes: ByteArray): Boolean {
+    return runCatching {
+        context.contentResolver.openOutputStream(uri)?.use { output ->
+            output.write(bytes)
+            output.flush()
+        } ?: error("Output stream acilamadi.")
+    }.isSuccess
+}
+
+private fun buildVateksanReport(
+    employees: List<Employee>,
+    overtimeRecords: List<OvertimeRecord>,
+    leaveRequests: List<LeaveRequest>,
+    payrollRuns: List<PayrollRun>,
+    faultReports: List<FaultReport>,
+    maintenancePlans: List<MaintenancePlan>,
+    assetAssignments: List<AssetAssignment>,
+    calibrationPlans: List<CalibrationPlan>,
+    auditChecks: List<AuditCheck>,
+    incidents: List<IncidentReport>,
+    correctiveActions: List<CorrectiveAction>,
+    visitorLogs: List<VisitorLog>,
+    trainingRecords: List<TrainingRecord>,
+    shiftPlans: List<ShiftPlan>,
+    documentExpiries: List<DocumentExpiry>,
+    moneyFormatter: DecimalFormat
+): String {
+    val reportDate = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").format(LocalDateTime.now())
+    val pendingLeaves = leaveRequests.count { !it.approved }
+    val openFaults = faultReports.count { !it.resolved }
+    val openActions = correctiveActions.count { !it.closed }
+    val nonConformance = auditChecks.count { it.status.equals("Uygunsuz", ignoreCase = true) }
+    val payrollTotal = payrollRuns.sumOf { it.netAmount }
+
+    val report = StringBuilder()
+    report.appendLine("VATEKSAN IS YERI DENETIM RAPORU")
+    report.appendLine("Olusturma zamani: $reportDate")
+    report.appendLine("")
+    report.appendLine("GENEL OZET")
+    report.appendLine("- Toplam calisan: ${employees.size}")
+    report.appendLine("- Kayitli yonetici: ${employees.count { it.isManager }}")
+    report.appendLine("- Toplam mesai kaydi: ${overtimeRecords.size}")
+    report.appendLine("- Bekleyen izin talebi: $pendingLeaves")
+    report.appendLine("- Kayitli net maas toplami: ${moneyFormatter.format(payrollTotal)} TL")
+    report.appendLine("- Acik ariza: $openFaults")
+    report.appendLine("- Bakim plani sayisi: ${maintenancePlans.size}")
+    report.appendLine("- Uygunsuz denetim maddesi: $nonConformance")
+    report.appendLine("- Acik duzeltici faaliyet: $openActions")
+    report.appendLine("")
+
+    appendReportSection(
+        report,
+        title = "CALISAN LISTESI",
+        lines = employees.map { employee ->
+            val managerText = if (employee.isManager) "yonetici" else "personel"
+            "${employee.name} | ${employee.role} | ${moneyFormatter.format(employee.monthlySalary)} TL | $managerText"
+        }
+    )
+
+    appendReportSection(
+        report,
+        title = "MESAI KAYITLARI",
+        lines = overtimeRecords.map { overtime ->
+            "${overtime.employeeName} | ${overtime.hours} saat | ${overtime.reason}"
+        }
+    )
+
+    appendReportSection(
+        report,
+        title = "IZIN TALEPLERI",
+        lines = leaveRequests.map { request ->
+            val state = if (request.approved) "onayli" else "bekliyor"
+            "${request.employeeName} | ${request.leaveType} | ${request.days} gun | $state"
+        }
+    )
+
+    appendReportSection(
+        report,
+        title = "MAAS KAYITLARI",
+        lines = payrollRuns.map { payroll ->
+            "${payroll.employeeName} | brut ${moneyFormatter.format(payroll.baseSalary)} TL | " +
+                "mesai ${moneyFormatter.format(payroll.overtimePayment)} TL | " +
+                "kesinti ${moneyFormatter.format(payroll.deduction)} TL | " +
+                "net ${moneyFormatter.format(payroll.netAmount)} TL"
+        }
+    )
+
+    appendReportSection(
+        report,
+        title = "ARIZA KAYITLARI",
+        lines = faultReports.map { fault ->
+            val state = if (fault.resolved) "kapali" else "acik"
+            "${fault.area} | ${fault.issue} | ${fault.priority} | $state"
+        }
+    )
+
+    appendReportSection(
+        report,
+        title = "BAKIM PLANLARI",
+        lines = maintenancePlans.map { plan ->
+            "${plan.equipment} | ${plan.owner} | ${plan.dueDate}"
+        }
+    )
+
+    appendReportSection(
+        report,
+        title = "ZIMMET KAYITLARI",
+        lines = assetAssignments.map { asset ->
+            "${asset.assetCode} | ${asset.assignee} | ${asset.location}"
+        }
+    )
+
+    appendReportSection(
+        report,
+        title = "KALIBRASYON PLANLARI",
+        lines = calibrationPlans.map { calibration ->
+            "${calibration.device} | ${calibration.interval} | ${calibration.responsible}"
+        }
+    )
+
+    appendReportSection(
+        report,
+        title = "DENETIM MADDELERI",
+        lines = auditChecks.map { check ->
+            val criticalText = if (check.critical) "kritik" else "normal"
+            "${check.area} | ${check.status} | ${check.note} | $criticalText"
+        }
+    )
+
+    appendReportSection(
+        report,
+        title = "OLAY BILDIRIMLERI",
+        lines = incidents.map { incident ->
+            "${incident.title} | ${incident.severity} | ${incident.owner}"
+        }
+    )
+
+    appendReportSection(
+        report,
+        title = "DUZELTICI FAALIYETLER",
+        lines = correctiveActions.map { action ->
+            val closedText = if (action.closed) "kapali" else "acik"
+            "${action.action} | ${action.owner} | ${action.dueDate} | $closedText"
+        }
+    )
+
+    appendReportSection(
+        report,
+        title = "ZIYARETCI LOGU",
+        lines = visitorLogs.map { visitor ->
+            "${visitor.visitorName} | ${visitor.company} | ${visitor.host} | ${visitor.purpose}"
+        }
+    )
+
+    appendReportSection(
+        report,
+        title = "EGITIM KAYITLARI",
+        lines = trainingRecords.map { training ->
+            val mandatoryText = if (training.mandatory) "zorunlu" else "opsiyonel"
+            "${training.topic} | ${training.audience} | ${training.date} | $mandatoryText"
+        }
+    )
+
+    appendReportSection(
+        report,
+        title = "VARDIYA PLANLARI",
+        lines = shiftPlans.map { shift ->
+            "${shift.team} | ${shift.date} | ${shift.shiftType}"
+        }
+    )
+
+    appendReportSection(
+        report,
+        title = "DOKUMAN GECERLILIK KAYITLARI",
+        lines = documentExpiries.map { document ->
+            "${document.documentName} | ${document.owner} | ${document.expiryDate}"
+        }
+    )
+
+    return report.toString()
+}
+
+private fun appendReportSection(report: StringBuilder, title: String, lines: List<String>) {
+    report.appendLine(title)
+    if (lines.isEmpty()) {
+        report.appendLine("- Kayit yok.")
+    } else {
+        lines.forEachIndexed { index, line ->
+            report.appendLine("${index + 1}) $line")
+        }
+    }
+    report.appendLine("")
+}
+
+private fun createPdfFromText(content: String): ByteArray {
+    val pageWidth = 595
+    val pageHeight = 842
+    val margin = 40f
+    val contentWidth = pageWidth - (margin * 2f)
+    val headerPaint = Paint().apply {
+        textSize = 13f
+        isFakeBoldText = true
+        isAntiAlias = true
+    }
+    val bodyPaint = Paint().apply {
+        textSize = 10.5f
+        isAntiAlias = true
+    }
+    val footerPaint = Paint().apply {
+        textSize = 9f
+        isAntiAlias = true
+    }
+    val lineHeight = bodyPaint.fontSpacing + 3f
+    val bodyTop = margin + (lineHeight * 2f)
+    val bodyBottom = pageHeight - margin - lineHeight
+    val wrappedLines = content.lines().flatMap { line -> wrapTextLine(line, bodyPaint, contentWidth) }
+
+    val pdfDocument = PdfDocument()
+    var pageNumber = 1
+    var page = pdfDocument.startPage(
+        PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNumber).create()
+    )
+    var canvas = page.canvas
+    var y = bodyTop
+
+    canvas.drawText("vateksan denetim raporu", margin, margin + lineHeight, headerPaint)
+
+    wrappedLines.forEach { line ->
+        if (y > bodyBottom) {
+            canvas.drawText("Sayfa $pageNumber", margin, pageHeight - margin, footerPaint)
+            pdfDocument.finishPage(page)
+            pageNumber += 1
+            page = pdfDocument.startPage(
+                PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNumber).create()
+            )
+            canvas = page.canvas
+            y = bodyTop
+            canvas.drawText("vateksan denetim raporu (devam)", margin, margin + lineHeight, headerPaint)
+        }
+        canvas.drawText(line, margin, y, bodyPaint)
+        y += lineHeight
+    }
+
+    canvas.drawText("Sayfa $pageNumber", margin, pageHeight - margin, footerPaint)
+    pdfDocument.finishPage(page)
+
+    val output = ByteArrayOutputStream()
+    pdfDocument.writeTo(output)
+    pdfDocument.close()
+    return output.toByteArray()
+}
+
+private fun wrapTextLine(line: String, paint: Paint, maxWidth: Float): List<String> {
+    if (line.isBlank()) return listOf("")
+
+    val wrapped = mutableListOf<String>()
+    var currentLine = ""
+
+    for (word in line.split(" ")) {
+        if (word.isBlank()) continue
+        val candidate = if (currentLine.isEmpty()) word else "$currentLine $word"
+        if (paint.measureText(candidate) <= maxWidth) {
+            currentLine = candidate
+            continue
+        }
+
+        if (currentLine.isNotEmpty()) {
+            wrapped += currentLine
+            currentLine = ""
+        }
+
+        if (paint.measureText(word) <= maxWidth) {
+            currentLine = word
+            continue
+        }
+
+        var remaining = word
+        while (remaining.isNotEmpty() && paint.measureText(remaining) > maxWidth) {
+            var splitIndex = remaining.length
+            while (splitIndex > 1 && paint.measureText(remaining.substring(0, splitIndex)) > maxWidth) {
+                splitIndex--
+            }
+            wrapped += remaining.substring(0, splitIndex)
+            remaining = remaining.substring(splitIndex)
+        }
+        currentLine = remaining
+    }
+
+    if (currentLine.isNotEmpty()) {
+        wrapped += currentLine
+    }
+
+    return if (wrapped.isEmpty()) listOf("") else wrapped
 }

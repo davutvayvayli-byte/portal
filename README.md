@@ -1,6 +1,6 @@
-# Is Yeri Denetim Android APK (Kotlin + Compose)
+# vateksan Android APK (Kotlin + Compose)
 
-Bu repo, is yeri denetimi icin cok modullu bir Android uygulamasi icerir.
+Bu repo, vateksan markasiyla is yeri denetimi icin cok modullu bir Android uygulamasi icerir.
 Uygulama yonetici ve saha ekiplerinin ayni panelden operasyonu takip etmesini hedefler.
 
 ## Uygulama Modulleri
@@ -21,6 +21,7 @@ Uygulama yonetici ve saha ekiplerinin ayni panelden operasyonu takip etmesini he
 - Egitim takibi
 - Vardiya planlama
 - Dokuman gecerlilik suresi takibi
+- Tek tikla PDF dokuman raporu cikartma
 
 ## Teknik Ozellikler
 
@@ -28,6 +29,7 @@ Uygulama yonetici ve saha ekiplerinin ayni panelden operasyonu takip etmesini he
 - Jetpack Compose + Material 3
 - Tek aktivite, cok sekmeli UI
 - In-memory kayit yontemi ile hizli MVP
+- Dashboard ekranindan PDF rapor disa aktarma
 
 ## APK Uretme
 
@@ -43,6 +45,16 @@ Uygulama yonetici ve saha ekiplerinin ayni panelden operasyonu takip etmesini he
    ```text
    app/build/outputs/apk/debug/app-debug.apk
    ```
+
+## Dokuman Ciktisi
+
+Uygulama icinde:
+
+1. Dashboard sekmesine girin.
+2. "PDF Raporu Kaydet" butonuna basin.
+3. Dosya adini secip kaydedin.
+
+Kayit edilen PDF, uygulamadaki tum ana kayitlari (calisan, mesai, izin, maas, ariza, denetim, vardiya vb.) tek raporda toplar.
 
 ## Not
 
