@@ -8,6 +8,7 @@
 
 # Android/Gradle
 /app/build/
+/android-sdk/
 
 # Kotlin
 *.kotlin_module
